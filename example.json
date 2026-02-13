@@ -1,0 +1,8 @@
+{
+  "auth-policy:policy": {
+    "description": "Policy example: Allow read access for 'reader' role and write access for 'admin'",
+    "language": "rego",
+    "rule": "default allow = false\nallow {\n    input.user.role == \"reader\"\n}\nallow_write {\n    input.user.role == \"admin\"\n}",
+    "owner": "lucia.cabanillas@telefonica.com"
+  }
+}
