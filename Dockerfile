@@ -13,7 +13,6 @@ RUN pip install "poetry>=1.8" && \
 
 # Copy application code
 COPY ./app /app/app
-RUN mkdir -p /app/policies/yang /app/policies/rego
 
 ENV PYTHONPATH=/app
 
