@@ -63,7 +63,7 @@ RUN mkdir -p /app/data
 EXPOSE 8000
 
 # Default environment variables for OPA
-ENV OPA_HOSTNAME=opa
+ENV OPA_HOSTNAME=localhost
 ENV OPA_PORT=8181
 
 # Start FastAPI
