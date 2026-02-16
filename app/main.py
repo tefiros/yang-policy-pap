@@ -10,12 +10,13 @@ import datetime
 import sqlite3
 import os
 from opa_client.opa import OpaClient
+import re
 
 # ----------------------
 # CONFIG
 # ----------------------
-OPA_HOSTNAME = os.getenv("OPA_HOSTNAME")
-OPA_PORT = os.getenv("OPA_PORT")
+OPA_HOSTNAME = os.getenv("OPA_HOSTNAME", "localhost")
+OPA_PORT = os.getenv("OPA_PORT", "8181")
 DB_FILE = "policies.db"
 
 app = FastAPI(title=__name__, version=__version__)
@@ -65,7 +66,7 @@ class PolicyData(BaseModel):
     language: Literal["rego", "cedar", "alfa"]
     rule: str   # El package ya viene dentro
     owner: str
-
+    version: str
 
 class AuthPolicyRequest(BaseModel):
     auth_policy: PolicyData = Field(..., alias="auth-policy:policy")
@@ -77,7 +78,6 @@ class AuthPolicyRequest(BaseModel):
 class AuthPolicyResponse(BaseModel):
     policy_id: str
     auth_policy: PolicyData = Field(..., alias="auth-policy:policy")
-    version: str
     last_modified: str
 
     class Config:
@@ -90,7 +90,15 @@ class AuthPolicyResponse(BaseModel):
 def now_iso():
     return datetime.datetime.utcnow().isoformat() + "Z"
 
+SEMVER_PATTERN = r"^v\d+\.\d+\.\d+$"
 
+def validate_version(version: str):
+    if not re.match(SEMVER_PATTERN, version):
+        raise HTTPException(
+            status_code=400,
+            detail="Version must follow format vX.Y.Z (example: v1.0.0)"
+        )
+    
 def save_policy_version(policy_id, description, language, rule, owner, version, last_modified):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -143,13 +151,13 @@ def get_policy(policy_id: str):
         description=row[1],
         language=row[2],
         rule=row[3],
-        owner=row[4]
+        owner=row[4],
+        version=row[5]
     )
 
     return AuthPolicyResponse.model_validate({
         "policy_id": policy_id,
         "auth-policy:policy": policy,
-        "version": row[5],
         "last_modified": row[6]
     })
 
@@ -200,7 +208,9 @@ def register_policy(request: AuthPolicyRequest):
 
     policy = request.auth_policy
     policy_id = str(uuid.uuid4())
-    version = now_iso()
+    version = policy.version
+    validate_version(version)
+    last_modified = now_iso()
 
     if policy.language == "rego":
         try:
@@ -213,6 +223,14 @@ def register_policy(request: AuthPolicyRequest):
 
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
+    cursor.execute("""
+        SELECT 1 FROM policy_versions
+        WHERE policy_id=? AND version=?
+    """, (policy_id, version))
+
+    if cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=400, detail="Version already exists")
 
     cursor.execute("""
         INSERT INTO policies
@@ -224,7 +242,7 @@ def register_policy(request: AuthPolicyRequest):
         policy.rule,
         policy.owner,
         version,
-        version
+        last_modified
     ))
 
     conn.commit()
@@ -237,14 +255,14 @@ def register_policy(request: AuthPolicyRequest):
         policy.rule,
         policy.owner,
         version,
-        version
+        last_modified
     )
 
     return AuthPolicyResponse.model_validate({
         "policy_id": policy_id,
         "auth-policy:policy": policy,
         "version": version,
-        "last_modified": version
+        "last_modified": last_modified
     })
 
 
@@ -260,10 +278,22 @@ def update_policy(policy_id: str, request: AuthPolicyRequest):
 
     cursor.execute("SELECT * FROM policies WHERE policy_id=?", (policy_id,))
     row = cursor.fetchone()
-    new_version = now_iso()
+    version = policy.version
+    validate_version(version)
+    last_modified = now_iso()
+
     if not row:
         conn.close()
         raise HTTPException(status_code=404, detail="Policy not found")
+    
+    cursor.execute("""
+        SELECT 1 FROM policy_versions
+        WHERE policy_id=? AND version=?
+    """, (policy_id, version))
+
+    if cursor.fetchone():
+        conn.close()
+        raise HTTPException(status_code=400, detail="Version already exists")
 
     save_policy_version(
         policy_id,
@@ -271,8 +301,8 @@ def update_policy(policy_id: str, request: AuthPolicyRequest):
         policy.language,
         policy.rule,
         policy.owner,
-        new_version,
-        new_version
+        version,
+        last_modified
     )
 
     policy = request.auth_policy
@@ -297,8 +327,8 @@ def update_policy(policy_id: str, request: AuthPolicyRequest):
         policy.language,
         policy.rule,
         policy.owner,
-        new_version,
-        new_version,
+        version,
+        last_modified,
         policy_id
     ))
 
@@ -308,8 +338,8 @@ def update_policy(policy_id: str, request: AuthPolicyRequest):
     return AuthPolicyResponse.model_validate({
         "policy_id": policy_id,
         "auth-policy:policy": policy,
-        "version": new_version,
-        "last_modified": new_version
+        "version": version,
+        "last_modified": last_modified
     })
 
 # ----------------------
@@ -377,9 +407,9 @@ def rollback_policy(policy_id: str, version: str):
             "description": description,
             "language": language,
             "rule": rule,
-            "owner": owner
+            "owner": owner,
+            "version": version
         },
-        "version": version,
         "last_modified": last_modified
     })
 

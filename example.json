@@ -3,6 +3,7 @@
     "description": "Policy example: Allow read access for 'reader' role and write access for 'admin'",
     "language": "rego",
     "rule": "package policy\ndefault allow = false\nallow {\n    input.user.role == \"writer\"\n}\nallow_write {\n    input.user.role == \"admin\"\n}",
-    "owner": "lucia.cabanillas@telefonica.com"
+    "owner": "lucia.cabanillas@telefonica.com",
+    "version": "v1.0.1"
   }
 }
