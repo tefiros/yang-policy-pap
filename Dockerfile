@@ -62,10 +62,6 @@ RUN mkdir -p /app/data
 # Expose FastAPI port
 EXPOSE 8000
 
-# Default environment variables for OPA
-ENV OPA_HOSTNAME=localhost
-ENV OPA_PORT=8181
-
 # Start FastAPI
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 

@@ -14,8 +14,8 @@ from opa_client.opa import OpaClient
 # ----------------------
 # CONFIG
 # ----------------------
-OPA_HOSTNAME = os.getenv("OPA_HOSTNAME", "localhost")
-OPA_PORT = int(os.getenv("OPA_PORT", "8181"))
+OPA_HOSTNAME = os.getenv("OPA_HOSTNAME")
+OPA_PORT = os.getenv("OPA_PORT")
 DB_FILE = "policies.db"
 
 app = FastAPI(title=__name__, version=__version__)
