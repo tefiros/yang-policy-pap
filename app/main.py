@@ -19,7 +19,7 @@ OPA_PORT = os.getenv("OPA_PORT")
 DB_FILE = "policies.db"
 
 app = FastAPI(title=__name__, version=__version__)
-opa_client = OpaClient(host=OPA_HOSTNAME, port=OPA_PORT)
+opa_client = OpaClient(host=OPA_HOSTNAME, port=int(OPA_PORT))
 
 # ----------------------
 # DATABASE INIT
