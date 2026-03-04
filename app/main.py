@@ -34,7 +34,7 @@ def init_db():
             policy_id TEXT PRIMARY KEY,
             description TEXT,
             language TEXT,
-            rule TEXT,
+            pac TEXT,
             owner TEXT,
             version TEXT,
             last_modified TEXT
@@ -46,7 +46,7 @@ def init_db():
             policy_id TEXT,
             description TEXT,
             language TEXT,
-            rule TEXT,
+            pac TEXT,
             owner TEXT,
             version TEXT,
             last_modified TEXT
@@ -64,7 +64,7 @@ init_db()
 class PolicyData(BaseModel):
     description: str
     language: Literal["rego", "cedar", "alfa"]
-    rule: str   # El package ya viene dentro
+    pac: str   # El package ya viene dentro
     owner: str
     version: str
 
@@ -99,19 +99,19 @@ def validate_version(version: str):
             detail="Version must follow format vX.Y.Z (example: v1.0.0)"
         )
     
-def save_policy_version(policy_id, description, language, rule, owner, version, last_modified):
+def save_policy_version(policy_id, description, language, pac, owner, version, last_modified):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
     cursor.execute("""
         INSERT INTO policy_versions
-        (policy_id, description, language, rule, owner, version, last_modified)
+        (policy_id, description, language, pac, owner, version, last_modified)
         VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (
         policy_id,
         description,
         language,
-        rule,
+        pac,
         owner,
         version,
         last_modified
@@ -150,7 +150,7 @@ def get_policy(policy_id: str):
     policy = PolicyData(
         description=row[1],
         language=row[2],
-        rule=row[3],
+        pac=row[3],
         owner=row[4],
         version=row[5]
     )
@@ -169,7 +169,7 @@ def get_policy_history(policy_id: str):
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT description, language, rule, owner, version, last_modified
+        SELECT description, language, pac, owner, version, last_modified
         FROM policy_versions
         WHERE policy_id=?
         ORDER BY last_modified ASC
@@ -185,7 +185,7 @@ def get_policy_history(policy_id: str):
         {
             "description": r[0],
             "language": r[1],
-            "rule": r[2],
+            "pac": r[2],
             "owner": r[3],
             "version": r[4],
             "last_modified": r[5]
@@ -215,7 +215,7 @@ def register_policy(request: AuthPolicyRequest):
     if policy.language == "rego":
         try:
             opa_client.update_policy_from_string(
-                policy.rule,
+                policy.pac,
                 policy_id
             )
         except Exception as e:
@@ -239,7 +239,7 @@ def register_policy(request: AuthPolicyRequest):
         policy_id,
         policy.description,
         policy.language,
-        policy.rule,
+        policy.pac,
         policy.owner,
         version,
         last_modified
@@ -252,7 +252,7 @@ def register_policy(request: AuthPolicyRequest):
         policy_id,
         policy.description,
         policy.language,
-        policy.rule,
+        policy.pac,
         policy.owner,
         version,
         last_modified
@@ -299,7 +299,7 @@ def update_policy(policy_id: str, request: AuthPolicyRequest):
         policy_id,
         policy.description,
         policy.language,
-        policy.rule,
+        policy.pac,
         policy.owner,
         version,
         last_modified
@@ -311,7 +311,7 @@ def update_policy(policy_id: str, request: AuthPolicyRequest):
     if policy.language == "rego":
         try:
             opa_client.update_policy_from_string(
-                policy.rule,
+                policy.pac,
                 policy_id
             )
         except Exception as e:
@@ -320,12 +320,12 @@ def update_policy(policy_id: str, request: AuthPolicyRequest):
 
     cursor.execute("""
         UPDATE policies
-        SET description=?, language=?, rule=?, owner=?, version=?, last_modified=?
+        SET description=?, language=?, pac=?, owner=?, version=?, last_modified=?
         WHERE policy_id=?
     """, (
         policy.description,
         policy.language,
-        policy.rule,
+        policy.pac,
         policy.owner,
         version,
         last_modified,
@@ -352,7 +352,7 @@ def rollback_policy(policy_id: str, version: str):
 
     # Buscar la versión histórica indicada
     cursor.execute("""
-        SELECT description, language, rule, owner
+        SELECT description, language, pac, owner
         FROM policy_versions
         WHERE policy_id=? AND version=?
     """, (policy_id, version))
@@ -362,19 +362,19 @@ def rollback_policy(policy_id: str, version: str):
         conn.close()
         raise HTTPException(status_code=404, detail="Version not found")
 
-    description, language, rule, owner = row
+    description, language, pac, owner = row
 
     last_modified = now_iso() 
 
 
     cursor.execute("""
         UPDATE policies
-        SET description=?, language=?, rule=?, owner=?, version=?, last_modified=?
+        SET description=?, language=?, pac=?, owner=?, version=?, last_modified=?
         WHERE policy_id=?
     """, (
         description,
         language,
-        rule,
+        pac,
         owner,
         version,
         last_modified,
@@ -388,7 +388,7 @@ def rollback_policy(policy_id: str, version: str):
         policy_id,
         description,
         language,
-        rule,
+        pac,
         owner,
         version,
         last_modified
@@ -397,7 +397,7 @@ def rollback_policy(policy_id: str, version: str):
     # Actualizar OPA si es Rego
     if language == "rego":
         try:
-            opa_client.update_policy_from_string(rule, policy_id)
+            opa_client.update_policy_from_string(pac, policy_id)
         except Exception as e:
             raise HTTPException(status_code=400, detail=str(e))
 
@@ -406,7 +406,7 @@ def rollback_policy(policy_id: str, version: str):
         "auth-policy:policy": {
             "description": description,
             "language": language,
-            "rule": rule,
+            "pac": pac,
             "owner": owner,
             "version": version
         },
