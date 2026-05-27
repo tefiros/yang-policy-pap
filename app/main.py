@@ -2,7 +2,7 @@ __name__ = "Policy Administration Point"
 __version__ = "3.0.0"
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Literal
 import uuid
 import os
@@ -54,18 +54,35 @@ init_repo()
 # ----------------------
 # MODELS
 # ----------------------
+SUPPORTED_LANGUAGES = {
+    "authz-policy:rego": "rego",
+    "authz-policy:cedar": "cedar",
+    "authz-policy:alfa": "alfa"
+}
+
 class PolicyData(BaseModel):
 
     domain: str
     description: str
-    language: Literal["rego", "cedar", "alfa"]
+    language: str
     pac: str
     owner: str
 
+    @field_validator("language")
+    @classmethod
+    def validate_language(cls, value):
 
-class AuthPolicyRequest(BaseModel):
+        if value not in SUPPORTED_LANGUAGES:
 
-    auth_policy: PolicyData = Field(..., alias="auth-policy:policy")
+            raise ValueError(
+                f"Unsupported language identity: {value}"
+            )
+
+        return value
+
+class AuthzPolicyRequest(BaseModel):
+
+    authz_policy: PolicyData = Field(..., alias="authz-policy:policy")
 
     class Config:
         allow_population_by_field_name = True
@@ -157,7 +174,16 @@ def save_policy_to_git(policy_id: str, policy: PolicyData):
         with open(keep_file, "w") as f:
             f.write("")
 
-    file_name = f"{policy_id}.{policy.language}"
+    extension = SUPPORTED_LANGUAGES.get(policy.language)
+
+    if not extension:
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported policy language: {policy.language}"
+        )
+
+    file_name = f"{policy_id}.{extension}"
 
     file_path = os.path.join(
         domain_path,
@@ -323,9 +349,9 @@ def get_policy(domain: str, policy_id: str):
 
 
 @app.post("/policies")
-def create_policy(request: AuthPolicyRequest):
+def create_policy(request: AuthzPolicyRequest):
 
-    policy = request.auth_policy
+    policy = request.authz_policy
 
     policy_id = str(uuid.uuid4())
 
@@ -345,10 +371,10 @@ def create_policy(request: AuthPolicyRequest):
 def update_policy(
     domain: str,
     policy_id: str,
-    request: AuthPolicyRequest
+    request: AuthzPolicyRequest
 ):
 
-    policy = request.auth_policy
+    policy = request.authz_policy
 
     if policy.domain != domain:
         raise HTTPException(400, "Domain mismatch")

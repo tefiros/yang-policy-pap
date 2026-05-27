@@ -1,9 +1,9 @@
 {
-  "auth-policy:policy": {
+  "authz-policy:policy": {
     "domain": "finance",
     "description": "Policy example: Allow read access for 'reader' role and write access for 'admin'",
-    "language": "rego",
-    "pac": "package policy\ndefault allow = false\nallow if {\n    input.user.role == \"writer\"\n}\nallow_write if {\n    input.user.role == \"admin\"\n}",
+    "language": "authz-policy:rego",
+    "pac": "package policy\n\ndefault allow = false\n\nallow if {\n    input.user.role == \"reader\"\n}\n\nallow_write if {\n    input.user.role == \"admin\"\n}",
     "owner": "urn:example:user:lucia"
   }
 }
