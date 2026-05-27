@@ -1,84 +1,71 @@
-# app/main.py
-__name__ = "Policy Administration Service"
-__version__ = "1.0.0"
+__name__ = "Policy Administration Point"
+__version__ = "3.0.0"
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 from typing import Literal
 import uuid
-import datetime
-import sqlite3
 import os
-from opa_client.opa import OpaClient
-import re
+import subprocess
 
 # ----------------------
 # CONFIG
 # ----------------------
-OPA_HOSTNAME = os.getenv("OPA_HOSTNAME", "localhost")
-OPA_PORT = os.getenv("OPA_PORT", "8181")
-DB_FILE = "policies.db"
+GIT_REPO_PATH = os.getenv("GIT_REPO_PATH", "./policies-repo")
 
-app = FastAPI(title=__name__, version=__version__)
-opa_client = OpaClient(host=OPA_HOSTNAME, port=int(OPA_PORT))
+DOMAINS_DIR = "domains"
+
+app = FastAPI(
+    title=__name__,
+    version=__version__
+)
 
 # ----------------------
-# DATABASE INIT
+# INIT
 # ----------------------
-def init_db():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
+def init_repo():
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS policies (
-            policy_id TEXT PRIMARY KEY,
-            description TEXT,
-            language TEXT,
-            pac TEXT,
-            owner TEXT,
-            version TEXT,
-            last_modified TEXT
+    os.makedirs(GIT_REPO_PATH, exist_ok=True)
+
+    git_dir = os.path.join(GIT_REPO_PATH, ".git")
+
+    if not os.path.exists(git_dir):
+
+        subprocess.run(
+            ["git", "init"],
+            cwd=GIT_REPO_PATH,
+            check=True
         )
-    """)
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS policy_versions (
-            policy_id TEXT,
-            description TEXT,
-            language TEXT,
-            pac TEXT,
-            owner TEXT,
-            version TEXT,
-            last_modified TEXT
+        subprocess.run(
+            ["git", "config", "user.email", "pap@local"],
+            cwd=GIT_REPO_PATH,
+            check=True
         )
-    """)
 
-    conn.commit()
-    conn.close()
+        subprocess.run(
+            ["git", "config", "user.name", "Policy Administration Point"],
+            cwd=GIT_REPO_PATH,
+            check=True
+        )
 
-init_db()
+init_repo()
 
 # ----------------------
 # MODELS
 # ----------------------
 class PolicyData(BaseModel):
+
+    domain: str
     description: str
     language: Literal["rego", "cedar", "alfa"]
-    pac: str   # El package ya viene dentro
+    pac: str
     owner: str
-    version: str
+
 
 class AuthPolicyRequest(BaseModel):
+
     auth_policy: PolicyData = Field(..., alias="auth-policy:policy")
-
-    class Config:
-        allow_population_by_field_name = True
-
-
-class AuthPolicyResponse(BaseModel):
-    policy_id: str
-    auth_policy: PolicyData = Field(..., alias="auth-policy:policy")
-    last_modified: str
 
     class Config:
         allow_population_by_field_name = True
@@ -87,356 +74,367 @@ class AuthPolicyResponse(BaseModel):
 # ----------------------
 # HELPERS
 # ----------------------
-def now_iso():
-    return datetime.datetime.utcnow().isoformat() + "Z"
+def run_git(cmd):
 
-SEMVER_PATTERN = r"^v\d+\.\d+\.\d+$"
+    result = subprocess.run(
+        cmd,
+        cwd=GIT_REPO_PATH,
+        capture_output=True,
+        text=True
+    )
 
-def validate_version(version: str):
-    if not re.match(SEMVER_PATTERN, version):
+    if result.returncode != 0:
+
         raise HTTPException(
-            status_code=400,
-            detail="Version must follow format vX.Y.Z (example: v1.0.0)"
+            status_code=500,
+            detail=f"Git error: {result.stderr.strip()}"
         )
-    
-def save_policy_version(policy_id, description, language, pac, owner, version, last_modified):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
 
-    cursor.execute("""
-        INSERT INTO policy_versions
-        (policy_id, description, language, pac, owner, version, last_modified)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (
-        policy_id,
-        description,
-        language,
-        pac,
-        owner,
-        version,
-        last_modified
-    ))
+    return result.stdout.strip()
 
-    conn.commit()
-    conn.close()
+
+def get_domain_path(domain: str):
+
+    return os.path.join(
+        GIT_REPO_PATH,
+        DOMAINS_DIR,
+        domain,
+        "policies"
+    )
+
+
+def get_policy_file(domain: str, policy_id: str):
+
+    domain_path = get_domain_path(domain)
+
+    if not os.path.exists(domain_path):
+        return None
+
+    for file in os.listdir(domain_path):
+
+        if file.startswith(policy_id):
+            return os.path.join(domain_path, file)
+
+    return None
+
+
+def git_commit(message: str):
+
+    run_git(["git", "add", "."])
+
+    try:
+
+        run_git([
+            "git",
+            "commit",
+            "-m",
+            message
+        ])
+
+    except Exception:
+        pass
+
+    return run_git([
+        "git",
+        "rev-parse",
+        "HEAD"
+    ])
+
+
+# ----------------------
+# POLICY OPS
+# ----------------------
+def save_policy_to_git(policy_id: str, policy: PolicyData):
+
+    domain_path = get_domain_path(policy.domain)
+
+    os.makedirs(domain_path, exist_ok=True)
+
+    keep_file = os.path.join(domain_path, ".gitkeep")
+
+    if not os.path.exists(keep_file):
+
+        with open(keep_file, "w") as f:
+            f.write("")
+
+    file_name = f"{policy_id}.{policy.language}"
+
+    file_path = os.path.join(
+        domain_path,
+        file_name
+    )
+
+    with open(file_path, "w") as f:
+
+        f.write(
+f"""# owner: {policy.owner}
+# description: {policy.description}
+
+{policy.pac}
+"""
+        )
+
+    commit_hash = git_commit(
+        f"{policy.domain} {policy_id}"
+    )
+
+    return commit_hash
+
+
+def delete_policy_from_git(domain: str, policy_id: str):
+
+    file_path = get_policy_file(domain, policy_id)
+
+    if not file_path:
+        raise HTTPException(404, "Policy not found")
+
+    relative_path = os.path.relpath(
+        file_path,
+        GIT_REPO_PATH
+    )
+
+    run_git([
+        "git",
+        "rm",
+        relative_path
+    ])
+
+    domain_path = get_domain_path(domain)
+
+    keep_file = os.path.join(domain_path, ".gitkeep")
+
+    if not os.path.exists(keep_file):
+
+        with open(keep_file, "w") as f:
+            f.write("")
+
+    commit_hash = git_commit(
+        f"delete {domain} {policy_id}"
+    )
+
+    return commit_hash
 
 
 # ----------------------
 # ROUTES
 # ----------------------
+@app.get("/")
+def root():
 
-@app.get("/policies", tags=["Read"])
-def get_policies():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT policy_id FROM policies")
-    rows = cursor.fetchall()
-    conn.close()
-    return {"policies": [r[0] for r in rows]}
+    return {
+        "service": __name__,
+        "version": __version__
+    }
 
 
-@app.get("/policies/{policy_id}", response_model=AuthPolicyResponse, tags=["Read"])
-def get_policy(policy_id: str):
+@app.get("/domains")
+def list_domains():
 
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM policies WHERE policy_id=?", (policy_id,))
-    row = cursor.fetchone()
-    conn.close()
-
-    if not row:
-        raise HTTPException(status_code=404, detail="Policy not found")
-
-    policy = PolicyData(
-        description=row[1],
-        language=row[2],
-        pac=row[3],
-        owner=row[4],
-        version=row[5]
+    domains_path = os.path.join(
+        GIT_REPO_PATH,
+        DOMAINS_DIR
     )
 
-    return AuthPolicyResponse.model_validate({
-        "policy_id": policy_id,
-        "auth-policy:policy": policy,
-        "last_modified": row[6]
-    })
+    if not os.path.exists(domains_path):
 
-
-@app.get("/policies/{policy_id}/history", tags=["Read"])
-def get_policy_history(policy_id: str):
-
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT description, language, pac, owner, version, last_modified
-        FROM policy_versions
-        WHERE policy_id=?
-        ORDER BY last_modified ASC
-    """, (policy_id,))
-
-    rows = cursor.fetchall()
-    conn.close()
-
-    if not rows:
-        raise HTTPException(status_code=404, detail="Policy not found")
-
-    history = [
-        {
-            "description": r[0],
-            "language": r[1],
-            "pac": r[2],
-            "owner": r[3],
-            "version": r[4],
-            "last_modified": r[5]
+        return {
+            "domains": []
         }
-        for r in rows
-    ]
+
+    return {
+        "domains": os.listdir(domains_path)
+    }
+
+
+@app.get("/policies")
+def list_policies():
+
+    policies = []
+
+    domains_root = os.path.join(
+        GIT_REPO_PATH,
+        DOMAINS_DIR
+    )
+
+    if not os.path.exists(domains_root):
+
+        return {
+            "policies": []
+        }
+
+    for domain in os.listdir(domains_root):
+
+        domain_path = os.path.join(
+            domains_root,
+            domain,
+            "policies"
+        )
+
+        if not os.path.exists(domain_path):
+            continue
+
+        for file in os.listdir(domain_path):
+
+            if file == ".gitkeep":
+                continue
+
+            policies.append({
+                "domain": domain,
+                "policy_id": file.split(".")[0],
+                "file": file
+            })
+
+    return {
+        "policies": policies
+    }
+
+
+@app.get("/policies/{domain}/{policy_id}")
+def get_policy(domain: str, policy_id: str):
+
+    file_path = get_policy_file(domain, policy_id)
+
+    if not file_path:
+        raise HTTPException(404, "Policy not found")
+
+    with open(file_path, "r") as f:
+        content = f.read()
+
+    relative_path = os.path.relpath(
+        file_path,
+        GIT_REPO_PATH
+    )
+
+    history = run_git([
+        "git",
+        "log",
+        "--oneline",
+        "--",
+        relative_path
+    ])
+
+    return {
+        "domain": domain,
+        "policy_id": policy_id,
+        "file": os.path.basename(file_path),
+        "content": content,
+        "git_history": history.splitlines()
+    }
+
+
+@app.post("/policies")
+def create_policy(request: AuthPolicyRequest):
+
+    policy = request.auth_policy
+
+    policy_id = str(uuid.uuid4())
+
+    commit_hash = save_policy_to_git(
+        policy_id,
+        policy
+    )
 
     return {
         "policy_id": policy_id,
-        "history": history
+        "domain": policy.domain,
+        "commit_hash": commit_hash
+    }
+
+
+@app.put("/policies/{domain}/{policy_id}")
+def update_policy(
+    domain: str,
+    policy_id: str,
+    request: AuthPolicyRequest
+):
+
+    policy = request.auth_policy
+
+    if policy.domain != domain:
+        raise HTTPException(400, "Domain mismatch")
+
+    existing = get_policy_file(domain, policy_id)
+
+    if not existing:
+        raise HTTPException(404, "Policy not found")
+
+    commit_hash = save_policy_to_git(
+        policy_id,
+        policy
+    )
+
+    return {
+        "policy_id": policy_id,
+        "domain": domain,
+        "commit_hash": commit_hash,
+        "message": "Policy updated"
+    }
+
+
+@app.delete("/policies/{domain}/{policy_id}")
+def delete_policy(domain: str, policy_id: str):
+
+    commit_hash = delete_policy_from_git(
+        domain,
+        policy_id
+    )
+
+    return {
+        "policy_id": policy_id,
+        "domain": domain,
+        "commit_hash": commit_hash,
+        "message": "Policy deleted"
     }
 
 
 # ----------------------
-# CREATE
-# ----------------------
-
-@app.post("/policies", response_model=AuthPolicyResponse, tags=["Create"])
-def register_policy(request: AuthPolicyRequest):
-
-    policy = request.auth_policy
-    policy_id = str(uuid.uuid4())
-    version = policy.version
-    validate_version(version)
-    last_modified = now_iso()
-
-    if policy.language == "rego":
-        try:
-            opa_client.update_policy_from_string(
-                policy.pac,
-                policy_id
-            )
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT 1 FROM policy_versions
-        WHERE policy_id=? AND version=?
-    """, (policy_id, version))
-
-    if cursor.fetchone():
-        conn.close()
-        raise HTTPException(status_code=400, detail="Version already exists")
-
-    cursor.execute("""
-        INSERT INTO policies
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (
-        policy_id,
-        policy.description,
-        policy.language,
-        policy.pac,
-        policy.owner,
-        version,
-        last_modified
-    ))
-
-    conn.commit()
-    conn.close()
-
-    save_policy_version(
-        policy_id,
-        policy.description,
-        policy.language,
-        policy.pac,
-        policy.owner,
-        version,
-        last_modified
-    )
-
-    return AuthPolicyResponse.model_validate({
-        "policy_id": policy_id,
-        "auth-policy:policy": policy,
-        "version": version,
-        "last_modified": last_modified
-    })
-
-
-# ----------------------
-# UPDATE
-# ----------------------
-
-@app.put("/policies/{policy_id}", response_model=AuthPolicyResponse, tags=["Update"])
-def update_policy(policy_id: str, request: AuthPolicyRequest):
-    policy = request.auth_policy
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT * FROM policies WHERE policy_id=?", (policy_id,))
-    row = cursor.fetchone()
-    version = policy.version
-    validate_version(version)
-    last_modified = now_iso()
-
-    if not row:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Policy not found")
-    
-    cursor.execute("""
-        SELECT 1 FROM policy_versions
-        WHERE policy_id=? AND version=?
-    """, (policy_id, version))
-
-    if cursor.fetchone():
-        conn.close()
-        raise HTTPException(status_code=400, detail="Version already exists")
-
-    save_policy_version(
-        policy_id,
-        policy.description,
-        policy.language,
-        policy.pac,
-        policy.owner,
-        version,
-        last_modified
-    )
-
-    policy = request.auth_policy
-
-
-    if policy.language == "rego":
-        try:
-            opa_client.update_policy_from_string(
-                policy.pac,
-                policy_id
-            )
-        except Exception as e:
-            conn.close()
-            raise HTTPException(status_code=400, detail=str(e))
-
-    cursor.execute("""
-        UPDATE policies
-        SET description=?, language=?, pac=?, owner=?, version=?, last_modified=?
-        WHERE policy_id=?
-    """, (
-        policy.description,
-        policy.language,
-        policy.pac,
-        policy.owner,
-        version,
-        last_modified,
-        policy_id
-    ))
-
-    conn.commit()
-    conn.close()
-
-    return AuthPolicyResponse.model_validate({
-        "policy_id": policy_id,
-        "auth-policy:policy": policy,
-        "version": version,
-        "last_modified": last_modified
-    })
-
-# ----------------------
 # ROLLBACK
 # ----------------------
-@app.put("/policies/{policy_id}/rollback/{version}", response_model=AuthPolicyResponse, tags=["Update"])
-def rollback_policy(policy_id: str, version: str):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
+@app.post("/rollback/{domain}/{policy_id}/{commit_hash}")
+def rollback(
+    domain: str,
+    policy_id: str,
+    commit_hash: str
+):
 
-    # Buscar la versión histórica indicada
-    cursor.execute("""
-        SELECT description, language, pac, owner
-        FROM policy_versions
-        WHERE policy_id=? AND version=?
-    """, (policy_id, version))
-    row = cursor.fetchone()
+    file_path = get_policy_file(domain, policy_id)
 
-    if not row:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Version not found")
+    if not file_path:
+        raise HTTPException(404, "Policy not found")
 
-    description, language, pac, owner = row
-
-    last_modified = now_iso() 
-
-
-    cursor.execute("""
-        UPDATE policies
-        SET description=?, language=?, pac=?, owner=?, version=?, last_modified=?
-        WHERE policy_id=?
-    """, (
-        description,
-        language,
-        pac,
-        owner,
-        version,
-        last_modified,
-        policy_id
-    ))
-    conn.commit()
-    conn.close()
-
-    # Guardar rollback como nueva versión en history
-    save_policy_version(
-        policy_id,
-        description,
-        language,
-        pac,
-        owner,
-        version,
-        last_modified
+    relative_path = os.path.relpath(
+        file_path,
+        GIT_REPO_PATH
     )
 
-    # Actualizar OPA si es Rego
-    if language == "rego":
-        try:
-            opa_client.update_policy_from_string(pac, policy_id)
-        except Exception as e:
-            raise HTTPException(status_code=400, detail=str(e))
+    run_git([
+        "git",
+        "checkout",
+        commit_hash,
+        "--",
+        relative_path
+    ])
 
-    return AuthPolicyResponse.model_validate({
+    rollback_commit = git_commit(
+        f"rollback {policy_id} to {commit_hash}"
+    )
+
+    return {
         "policy_id": policy_id,
-        "auth-policy:policy": {
-            "description": description,
-            "language": language,
-            "pac": pac,
-            "owner": owner,
-            "version": version
-        },
-        "last_modified": last_modified
-    })
+        "rollback_to": commit_hash,
+        "new_commit_hash": rollback_commit
+    }
 
-
-@app.delete("/policies/{policy_id}", tags=["Delete"])
-def delete_policy(policy_id: str):
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM policies WHERE policy_id = ?", (policy_id,))
-    deleted = cursor.rowcount
-    conn.commit()
-    conn.close()
-
-    try:
-        opa_client.delete_policy(policy_id)
-    except Exception:
-        pass
-
-    if deleted == 0:
-        raise HTTPException(status_code=404, detail="Policy not found")
-
-    return {"message": f"Policy '{policy_id}' deleted successfully"}
 
 # ----------------------
 # MAIN
 # ----------------------
-
 if __name__ == "__main__":
+
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000
+    )
