@@ -13,7 +13,7 @@ import subprocess
 # ----------------------
 GIT_REPO_PATH = os.getenv("GIT_REPO_PATH", "./policies-repo")
 
-DOMAINS_DIR = "domains"
+AREAS_DIR = "areas"
 
 app = FastAPI(
     title=__name__,
@@ -62,7 +62,7 @@ SUPPORTED_LANGUAGES = {
 
 class PolicyData(BaseModel):
 
-    domain: str
+    area: str
     description: str
     language: str
     pac: str
@@ -110,27 +110,27 @@ def run_git(cmd):
     return result.stdout.strip()
 
 
-def get_domain_path(domain: str):
+def get_area_path(area: str):
 
     return os.path.join(
         GIT_REPO_PATH,
-        DOMAINS_DIR,
-        domain,
+        AREAS_DIR,
+        area,
         "policies"
     )
 
 
-def get_policy_file(domain: str, policy_id: str):
+def get_policy_file(area: str, policy_id: str):
 
-    domain_path = get_domain_path(domain)
+    area_path = get_area_path(area)
 
-    if not os.path.exists(domain_path):
+    if not os.path.exists(area_path):
         return None
 
-    for file in os.listdir(domain_path):
+    for file in os.listdir(area_path):
 
         if file.startswith(policy_id):
-            return os.path.join(domain_path, file)
+            return os.path.join(area_path, file)
 
     return None
 
@@ -163,11 +163,11 @@ def git_commit(message: str):
 # ----------------------
 def save_policy_to_git(policy_id: str, policy: PolicyData):
 
-    domain_path = get_domain_path(policy.domain)
+    area_path = get_area_path(policy.area)
 
-    os.makedirs(domain_path, exist_ok=True)
+    os.makedirs(area_path, exist_ok=True)
 
-    keep_file = os.path.join(domain_path, ".gitkeep")
+    keep_file = os.path.join(area_path, ".gitkeep")
 
     if not os.path.exists(keep_file):
 
@@ -186,7 +186,7 @@ def save_policy_to_git(policy_id: str, policy: PolicyData):
     file_name = f"{policy_id}.{extension}"
 
     file_path = os.path.join(
-        domain_path,
+        area_path,
         file_name
     )
 
@@ -201,15 +201,15 @@ f"""# owner: {policy.owner}
         )
 
     commit_hash = git_commit(
-        f"{policy.domain} {policy_id}"
+        f"{policy.area} {policy_id}"
     )
 
     return commit_hash
 
 
-def delete_policy_from_git(domain: str, policy_id: str):
+def delete_policy_from_git(area: str, policy_id: str):
 
-    file_path = get_policy_file(domain, policy_id)
+    file_path = get_policy_file(area, policy_id)
 
     if not file_path:
         raise HTTPException(404, "Policy not found")
@@ -225,9 +225,9 @@ def delete_policy_from_git(domain: str, policy_id: str):
         relative_path
     ])
 
-    domain_path = get_domain_path(domain)
+    area_path = get_area_path(area)
 
-    keep_file = os.path.join(domain_path, ".gitkeep")
+    keep_file = os.path.join(area_path, ".gitkeep")
 
     if not os.path.exists(keep_file):
 
@@ -235,7 +235,7 @@ def delete_policy_from_git(domain: str, policy_id: str):
             f.write("")
 
     commit_hash = git_commit(
-        f"delete {domain} {policy_id}"
+        f"delete {area} {policy_id}"
     )
 
     return commit_hash
@@ -253,22 +253,22 @@ def root():
     }
 
 
-@app.get("/domains")
-def list_domains():
+@app.get("/areas")
+def list_areas():
 
-    domains_path = os.path.join(
+    areas_path = os.path.join(
         GIT_REPO_PATH,
-        DOMAINS_DIR
+        AREAS_DIR
     )
 
-    if not os.path.exists(domains_path):
+    if not os.path.exists(areas_path):
 
         return {
-            "domains": []
+            "areas": []
         }
 
     return {
-        "domains": os.listdir(domains_path)
+        "areas": os.listdir(areas_path)
     }
 
 
@@ -277,35 +277,35 @@ def list_policies():
 
     policies = []
 
-    domains_root = os.path.join(
+    areas_root = os.path.join(
         GIT_REPO_PATH,
-        DOMAINS_DIR
+        AREAS_DIR
     )
 
-    if not os.path.exists(domains_root):
+    if not os.path.exists(areas_root):
 
         return {
             "policies": []
         }
 
-    for domain in os.listdir(domains_root):
+    for area in os.listdir(areas_root):
 
-        domain_path = os.path.join(
-            domains_root,
-            domain,
+        area_path = os.path.join(
+            areas_root,
+            area,
             "policies"
         )
 
-        if not os.path.exists(domain_path):
+        if not os.path.exists(area_path):
             continue
 
-        for file in os.listdir(domain_path):
+        for file in os.listdir(area_path):
 
             if file == ".gitkeep":
                 continue
 
             policies.append({
-                "domain": domain,
+                "area": area,
                 "policy_id": file.split(".")[0],
                 "file": file
             })
@@ -315,10 +315,10 @@ def list_policies():
     }
 
 
-@app.get("/policies/{domain}/{policy_id}")
-def get_policy(domain: str, policy_id: str):
+@app.get("/policies/{area}/{policy_id}")
+def get_policy(area: str, policy_id: str):
 
-    file_path = get_policy_file(domain, policy_id)
+    file_path = get_policy_file(area, policy_id)
 
     if not file_path:
         raise HTTPException(404, "Policy not found")
@@ -340,7 +340,7 @@ def get_policy(domain: str, policy_id: str):
     ])
 
     return {
-        "domain": domain,
+        "area": area,
         "policy_id": policy_id,
         "file": os.path.basename(file_path),
         "content": content,
@@ -362,24 +362,24 @@ def create_policy(request: AuthzPolicyRequest):
 
     return {
         "policy_id": policy_id,
-        "domain": policy.domain,
+        "area": policy.area,
         "commit_hash": commit_hash
     }
 
 
-@app.put("/policies/{domain}/{policy_id}")
+@app.put("/policies/{area}/{policy_id}")
 def update_policy(
-    domain: str,
+    area: str,
     policy_id: str,
     request: AuthzPolicyRequest
 ):
 
     policy = request.authz_policy
 
-    if policy.domain != domain:
-        raise HTTPException(400, "Domain mismatch")
+    if policy.area != area:
+        raise HTTPException(400, "area mismatch")
 
-    existing = get_policy_file(domain, policy_id)
+    existing = get_policy_file(area, policy_id)
 
     if not existing:
         raise HTTPException(404, "Policy not found")
@@ -391,23 +391,23 @@ def update_policy(
 
     return {
         "policy_id": policy_id,
-        "domain": domain,
+        "area": area,
         "commit_hash": commit_hash,
         "message": "Policy updated"
     }
 
 
-@app.delete("/policies/{domain}/{policy_id}")
-def delete_policy(domain: str, policy_id: str):
+@app.delete("/policies/{area}/{policy_id}")
+def delete_policy(area: str, policy_id: str):
 
     commit_hash = delete_policy_from_git(
-        domain,
+        area,
         policy_id
     )
 
     return {
         "policy_id": policy_id,
-        "domain": domain,
+        "area": area,
         "commit_hash": commit_hash,
         "message": "Policy deleted"
     }
@@ -416,14 +416,14 @@ def delete_policy(domain: str, policy_id: str):
 # ----------------------
 # ROLLBACK
 # ----------------------
-@app.post("/rollback/{domain}/{policy_id}/{commit_hash}")
+@app.post("/rollback/{area}/{policy_id}/{commit_hash}")
 def rollback(
-    domain: str,
+    area: str,
     policy_id: str,
     commit_hash: str
 ):
 
-    file_path = get_policy_file(domain, policy_id)
+    file_path = get_policy_file(area, policy_id)
 
     if not file_path:
         raise HTTPException(404, "Policy not found")
