@@ -3,10 +3,13 @@ __version__ = "3.0.0"
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, field_validator
-from typing import Literal
+from typing import Literal, Optional
 import uuid
 import os
+import hashlib
+import re
 import subprocess
+from urllib.parse import urlparse
 
 # ----------------------
 # CONFIG
@@ -60,6 +63,18 @@ SUPPORTED_LANGUAGES = {
     "authz-policy:alfa": "alfa"
 }
 
+def validate_uri(value: str, field_name: str) -> str:
+ 
+    parsed = urlparse(value)
+ 
+    if not parsed.scheme or not parsed.netloc and not parsed.path:
+        raise ValueError(
+            f"'{field_name}' must be a valid URI (e.g. urn:example:foo or https://example.com/bar)"
+        )
+ 
+    return value
+ 
+
 class PolicyData(BaseModel):
 
     area: str
@@ -67,6 +82,8 @@ class PolicyData(BaseModel):
     language: str
     pac: str
     owner: str
+    author: str
+    origin: Optional[str] = None
 
     @field_validator("language")
     @classmethod
@@ -79,7 +96,31 @@ class PolicyData(BaseModel):
             )
 
         return value
-
+    
+    @field_validator("area")
+    @classmethod
+    def validate_area(cls, value):
+        return validate_uri(value, "area")
+ 
+    @field_validator("owner")
+    @classmethod
+    def validate_owner(cls, value):
+        return validate_uri(value, "owner")
+ 
+    @field_validator("author")
+    @classmethod
+    def validate_author(cls, value):
+        return validate_uri(value, "author")
+ 
+    @field_validator("origin")
+    @classmethod
+    def validate_origin(cls, value):
+ 
+        if value is None:
+            return value
+ 
+        return validate_uri(value, "origin")
+ 
 class AuthzPolicyRequest(BaseModel):
 
     authz_policy: PolicyData = Field(..., alias="authz-policy:policy")
@@ -110,14 +151,23 @@ def run_git(cmd):
     return result.stdout.strip()
 
 
+def uri_to_dir_path(uri: str) -> str:
+    if uri.startswith("urn:"):
+        parts = uri[4:].split(":")  
+        return "/".join(parts)
+
+    parsed = urlparse(uri)
+    return f"{parsed.netloc}{parsed.path}".strip("/")
+
 def get_area_path(area: str):
 
     return os.path.join(
         GIT_REPO_PATH,
         AREAS_DIR,
-        area,
+        uri_to_dir_path(area),
         "policies"
     )
+
 
 
 def get_policy_file(area: str, policy_id: str):
@@ -162,48 +212,52 @@ def git_commit(message: str):
 # POLICY OPS
 # ----------------------
 def save_policy_to_git(policy_id: str, policy: PolicyData):
-
+ 
     area_path = get_area_path(policy.area)
-
+ 
     os.makedirs(area_path, exist_ok=True)
-
+ 
     keep_file = os.path.join(area_path, ".gitkeep")
-
+ 
     if not os.path.exists(keep_file):
-
+ 
         with open(keep_file, "w") as f:
             f.write("")
-
+ 
     extension = SUPPORTED_LANGUAGES.get(policy.language)
-
+ 
     if not extension:
-
+ 
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported policy language: {policy.language}"
         )
-
+ 
     file_name = f"{policy_id}.{extension}"
-
+ 
     file_path = os.path.join(
         area_path,
         file_name
     )
-
+ 
+    origin_line = f"# origin: {policy.origin}" if policy.origin else "# origin: (none)"
+ 
     with open(file_path, "w") as f:
-
+ 
         f.write(
 f"""# owner: {policy.owner}
+# author: {policy.author}
+{origin_line}
 # description: {policy.description}
-
+ 
 {policy.pac}
 """
         )
-
+ 
     commit_hash = git_commit(
         f"{policy.area} {policy_id}"
     )
-
+ 
     return commit_hash
 
 

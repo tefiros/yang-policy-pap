@@ -1,9 +1,11 @@
 {
   "authz-policy:policy": {
-    "domain": "finance",
+    "area": "urn:example:server-dmz-layer1",
     "description": "Policy example: Allow read access for 'reader' role and write access for 'admin'",
     "language": "authz-policy:rego",
-    "pac": "package policy\n\ndefault allow = false\n\nallow if {\n    input.user.role == \"reader\"\n}\n\nallow_write if {\n    input.user.role == \"admin\"\n}",
-    "owner": "urn:example:user:lucia"
+    "pac": "package policy\n\ndefault allow = false\n\nallow if{\n    input.user.role == \"reader\"\n}\n\nallow_write if{\n    input.user.role == \"admin\"\n}",
+    "owner": "urn:example:user:lucia",
+    "author": "urn:example:policy-creator",
+    "origin": "urn:example:administrative-operational-requirements"
   }
 }
